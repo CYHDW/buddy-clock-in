@@ -1,0 +1,41 @@
+{
+  "_comment": "Buddy 积分助手配置模板。复制到 %APPDATA%\\buddy-credits\\config.json 后按需启用。所有值支持 ${ENV_VAR} 占位。",
+  "notify": {
+    "feishu": {
+      "enabled": false,
+      "webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+      "secret": ""
+    },
+    "wecom": {
+      "enabled": false,
+      "webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    },
+    "dingtalk": {
+      "enabled": false,
+      "webhook_url": "https://oapi.dingtalk.com/robot/send?access_token=xxxxxxxx",
+      "secret": ""
+    },
+    "telegram": {
+      "enabled": false,
+      "bot_token": "",
+      "chat_id": ""
+    },
+    "serverchan": {
+      "enabled": false,
+      "send_key": ""
+    },
+    "custom": [
+      {
+        "enabled": false,
+        "name": "示例：自定义机器人",
+        "url": "https://example.com/webhook",
+        "method": "POST",
+        "content_type": "application/json",
+        "headers": {
+          "Authorization": "Bearer ${MY_BOT_TOKEN}"
+        },
+        "body_template": "{\"msgtype\":\"text\",\"text\":{\"content\":\"{title}\\n{text}\"}}"
+      }
+    ]
+  }
+}
