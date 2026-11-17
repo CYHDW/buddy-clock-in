@@ -51,16 +51,27 @@ Windows: %LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop.in
    `electron_browser_workbuddy_storage.loggerGet()`，其返回 JSON 里的 `atRestSecretKey`
    做一次 `sha256` 即得 32 字节保护密钥（`keyId` = 其 sha256 前 16 位十六进制，
    与 `~/.workbuddy/keyblob` 中 `slots[0].protectorKeyId` 对应）。
-2. 字段密文用客户端自带的 `resources/app.asar/main/dist.js` 中 `AtRestCrypto` 解开，
-   `AAD` 为 `framing=field`。该模块是纯 Node 实现，可直接 `require`。
+2. 字段密文用客户端 asar 内的 `AtRestCrypto` 解开，`AAD` 为 `framing=field`。
+   该模块是纯 Node 实现，可直接 `require`。
 3. 因为要用内部绑定，解密进程必须由客户端自带的 Electron 二进制以
    `ELECTRON_RUN_AS_NODE=1` 运行——系统 python / node 拿不到那把密钥。
 
 所以：**重新登录不能解除加密本身**（写回仍是密文），真正需要的是走上面这条解密通道。
 
+加密模块的位置和导出名会随客户端大版本变化，已知两代：
+
+| 客户端 | 模块 | 导出 | 直接 require 可用 |
+| --- | --- | --- | --- |
+| 5.9.x | `main/dist.js` | `AtRestCrypto = v` | 是，`new v()` |
+| 5.11.x | `main/src.js` | `AtRestCrypto = p`、`parseSupportedEnvelope = x` | **否**，`exports.p` 是惰性 getter，必须先调用初始化导出 `m()` |
+
+`wb_token.js` 因此不写死路径和导出名：按 `src.js → dist.js → index.js` 依次尝试，
+用「原型上同时存在 `open` 与 `seal`」识别 codec 类，按函数名 `parseSupportedEnvelope`
+找信封解析器；都不成立就轮流调用模块的零参导出做 `forceInit`，每调一次重新探测一次。
+
 两个实现上的坑，改代码时容易踩：
 
-- `dist.js` 是懒加载的，不先调 `dist.y()` 初始化，`AtRestCrypto`（`dist.v`）就是 `undefined`，
+- 导出是**惰性**的：不先调初始化函数，`AtRestCrypto` 导出值为 `undefined`，
   会报 `Cannot read properties of undefined (reading 'has')`。
 - 会话字段用的是**保护密钥**直接加密（envelope 的 `keyId` 等于 `protectorKeyId`），
   而不是 keyblob 里的 master key；用错会报 `ciphertext declares a different key id`。

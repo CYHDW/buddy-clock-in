@@ -42,7 +42,7 @@ from datetime import datetime, timedelta, timezone
 # 常量
 # ---------------------------------------------------------------------------
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 SKILL_NAME = "buddy-credits"
 
 # 主备 endpoint(来自 cli/product.json 的 endpoint / 备用域名)
@@ -559,6 +559,7 @@ def mod_travel(client, dry_run=False, wait=False, strategy="max_reward", max_rou
         "state": "",
         "message": "",
         "waiting_for": None,
+        "next_trip": None,
     }
 
     cfg = client.request(API_TRAVEL_CONFIG, "GET", allow_fail=True)
@@ -657,6 +658,12 @@ def mod_travel(client, dry_run=False, wait=False, strategy="max_reward", max_rou
                     remain = max(0, int(arrive - (dd.get("server_now") or time.time())))
                     h, m = divmod(remain // 60, 60)
                     res["message"] = f"已派 Buddy 前往「{loc.get('name')}」,预计 {h} 小时 {m} 分钟后到达并带回明信片"
+                    # 供日报渲染:收了明信片后紧接着再出发时,要把「下一站 + 剩余时间」一并报出来
+                    res["next_trip"] = {
+                        "location": loc.get("name") or "",
+                        "remain_seconds": remain,
+                        "duration_hours": dd.get("duration_hours"),
+                    }
                     return res
                 d = dd
                 continue
@@ -866,10 +873,21 @@ def render_text(report):
     # 旅行
     if t:
         rounds = t.get("rounds") or []
+        # 「还剩多久」：优先取本次再出发的倒计时,其次取旅行中的倒计时
+        nt = t.get("next_trip") or {}
+        wf = t.get("waiting_for") or {}
+        remain = nt.get("remain_seconds") or wf.get("remain_seconds") or 0
+        eta = ""
+        if remain:
+            h, m_ = divmod(int(remain) // 60, 60)
+            eta = f",还需 {h} 小时 {m_} 分" if h else f",还需 {m_} 分钟"
         if t.get("credits_gained"):
             locs = "、".join([r.get("location", "") for r in rounds if r.get("action") == "claim" and r.get("location")])
-            L.append(f"🐱 派喵喵旅行 收明信片 +{t['credits_gained']}" + (f"（{locs}）" if locs else ""))
-        elif t.get("waiting_for"):
+            line = f"🐱 派喵喵旅行 收明信片 +{t['credits_gained']}" + (f"（{locs}）" if locs else "")
+            if nt.get("location"):
+                line += f" → 已再出发前往「{nt['location']}」{eta}"
+            L.append(line)
+        elif wf:
             L.append(f"🐱 派喵喵旅行 {t.get('message','')}")
         else:
             L.append(f"🐱 派喵喵旅行 {t.get('message') or '无动作'}")

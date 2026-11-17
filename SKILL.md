@@ -18,7 +18,7 @@ description_en: >
   digest and pushes it to Feishu, WeCom, DingTalk, Telegram, ServerChan or any custom webhook.
   Idempotent, dry-run capable, and designed for unattended scheduled runs.
 category: productivity
-version: 1.1.0
+version: 1.1.1
 author: 马总
 ---
 
@@ -104,10 +104,22 @@ Windows: %LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop.in
    `electron_browser_workbuddy_storage.loggerGet()`，返回的 JSON 里 `atRestSecretKey`
    经 `sha256` 得到 32 字节静态保护密钥（`keyId` = 其 sha256 前 16 位十六进制，与
    `~/.workbuddy/keyblob` 的 `slots[0].protectorKeyId` 对得上）。
-2. 字段密文用 `resources/app.asar/main/dist.js` 里的 `AtRestCrypto` 以
-   `AAD(framing="field")` 解开；该模块是纯 Node 实现，可直接 `require`。
+2. 字段密文用 asar 内的 `AtRestCrypto` 以 `AAD(framing="field")` 解开；该模块是纯 Node
+   实现，可直接 `require`。
 3. 因为要拿内部绑定，解密进程必须由 WorkBuddy 自带的 Electron 二进制以
    `ELECTRON_RUN_AS_NODE=1` 方式运行——普通 python 或系统 node 都拿不到密钥。
+
+**模块位置随客户端版本漂移（已知两代）**：
+
+| 客户端 | 加密模块 | 导出名 | 能否直接 require |
+| --- | --- | --- | --- |
+| 5.9.x | `main/dist.js` | `AtRestCrypto=v` | 可用，`new v()` 即可 |
+| 5.11.x | `main/src.js` | `AtRestCrypto=p`、`parseSupportedEnvelope=x` | **不可用**，导出是惰性 getter，`exports.p` 在初始化函数 `m()` 调用前为 `undefined` |
+
+因此 `wb_token.js` 不写死路径与导出名，而是：按 `main/src.js → main/dist.js →
+main/index.js` 顺序试，用「原型上同时有 `open` 与 `seal`」来识别 codec 类，再按
+`parseSupportedEnvelope` 的函数名找信封解析器；找不到就轮流调用模块的零参导出（`forceInit`），
+每调一次就重新探测，直到 codec 可解析。**客户端再换名换位置通常无需改代码。**
 
 因此：
 
@@ -116,6 +128,9 @@ Windows: %LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop.in
 - 解密失败时 `run` 会以退出码 `2` 结束，并打印 `wb_token.js` 返回的失败阶段
   （`binding` / `loggerGet` / `codec` / `decrypt` 等），据此定位是客户端升级、
   安装路径变动还是 keyblob 被重建
+- `codec` 阶段失败通常是客户端大版本把加密模块挪了位置或改了导出名——先看
+  `resources/app.asar` 里 `main/` 下哪个文件含 `parseSupportedEnvelope`，再决定是否
+  扩展 `MODULE_CANDIDATES`
 
 ## 配置 IM 推送
 
@@ -181,7 +196,7 @@ Linux：`~/.local/share/buddy-credits/config.json`
 | `未找到本机登录会话` | 会话文件不存在 | 打开 WorkBuddy 桌面端登录一次；或设 `BUDDY_CREDITS_AUTH_FILE` |
 | 四个接口全报 `401 Authorization Required`（返回 HTML，openresty/apisix） | auth 目录下有两份会话，脚本选中了 `workbuddy-desktop-ai.info`（`domain=www.workbuddy.ai`），该 token 调 `/v2/*` 一律 401 | 已修：`load_session` 会解析**所有** `.info` 后按 domain 排序，优先 `copilot.tencent.com` / `www.codebuddy.cn` 那一份。若仍复现，设 `BUDDY_CREDITS_AUTH_FILE=%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop.info` 强制指定 |
 | `登录凭据已过期` | token 过期 | 打开桌面端重新登录，客户端会自动回写会话文件 |
-| 退出码 2 且提示「accessToken 已被桌面端加密」 | 5.9.3+ 加密，且自动解密通道没跑通 | 看随后打印的失败阶段：`binding`→客户端大版本不匹配；`loggerGet`→客户端未安装/被拦截；`decrypt`→keyblob 被重建，需在客户端重新登录一次让字段重新写入。可设 `BUDDY_CREDITS_DESKTOP_EXE` 指定 exe |
+| 退出码 2 且提示「accessToken 已被桌面端加密」 | 5.9.3+ 加密，且自动解密通道没跑通 | 看随后打印的失败阶段：`binding`→客户端大版本不匹配；`loggerGet`→客户端未安装/被拦截；`codec`→加密模块换位置/改导出名（见上文「模块位置随客户端版本漂移」）；`decrypt`→keyblob 被重建，需在客户端重新登录一次让字段重新写入。可设 `BUDDY_CREDITS_DESKTOP_EXE` 指定 exe |
 | 退出码 3 | 网络不可达 | 检查网络/代理；脚本会自动在主备 endpoint 间切换 |
 | 旅行一直 traveling | 服务端分配的时长未到 | 用 `--wait` 阻塞等待，或下次运行再领 |
 | 推送没收到 | 配置未生效 | 检查 `config.json` 路径；`doctor` 会打印已配置的通道 |
@@ -201,6 +216,15 @@ assets/config.example.json   配置模板
 ---
 
 ## 版本历史
+
+### v1.1.1（2026-11-17）
+- **适配客户端 5.11.3 解密失效**：加密模块从 `main/dist.js`（导出 `v`）搬到
+  `main/src.js`（导出 `p` / `x`，初始化函数 `m`），原写死路径的解密器直接报
+  `atrest: AtRestCrypto class not resolved`、`run` 退出码 2。现改为**按结构特征自适应
+  解析**（模块候选列表 + 原型方法识别 codec + 零参导出 `forceInit`），两代客户端通用，
+  以后再换名换位置通常无需改代码。
+- 日报补全「再出发」信息：收明信片后若当轮又派出去，原来只报「收明信片 +N」，
+  现同行追加 `→ 已再出发前往「X」,还需 h 小时 m 分`，符合汇报格式要求。
 
 ### v1.1.0+local（本机补丁，2026-11-02）
 - **修复选错会话导致全接口 401**：本机 auth 目录下同时存在
